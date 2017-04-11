@@ -331,25 +331,33 @@ class FormulaAuditor
 
     problem "File should end with a newline" unless text.trailing_newline?
 
-    versioned_formulae = Dir[formula.path.to_s.gsub(/\.rb$/, "@*.rb")]
-    needs_versioned_alias = !versioned_formulae.empty? &&
-                            formula.tap &&
-                            formula.aliases.grep(/.@\d/).empty?
-    if needs_versioned_alias
-      _, last_alias_version = File.basename(versioned_formulae.sort.reverse.first)
-                                  .gsub(/\.rb$/, "")
-                                  .split("@")
-      major, minor, = formula.version.to_s.split(".")
-      alias_name = if last_alias_version.split(".").length == 1
-        "#{formula.name}@#{major}"
-      else
-        "#{formula.name}@#{major}.#{minor}"
+    if formula.versioned_formula?
+      unversioned_formula = Pathname.new formula.path.to_s.gsub(/@.*\.rb$/, ".rb")
+      unless unversioned_formula.exist?
+        unversioned_name = unversioned_formula.basename(".rb")
+        problem "#{formula} is versioned but no #{unversioned_name} formula exists"
       end
-      problem <<-EOS.undent
-        Formula has other versions so create an alias:
-          cd #{formula.tap.alias_dir}
-          ln -s #{formula.path.to_s.gsub(formula.tap.path, "..")} #{alias_name}
-      EOS
+    else
+      versioned_formulae = Dir[formula.path.to_s.gsub(/\.rb$/, "@*.rb")]
+      needs_versioned_alias = !versioned_formulae.empty? &&
+                              formula.tap &&
+                              formula.aliases.grep(/.@\d/).empty?
+      if needs_versioned_alias
+        _, last_alias_version = File.basename(versioned_formulae.sort.reverse.first)
+                                    .gsub(/\.rb$/, "")
+                                    .split("@")
+        major, minor, = formula.version.to_s.split(".")
+        alias_name = if last_alias_version.split(".").length == 1
+          "#{formula.name}@#{major}"
+        else
+          "#{formula.name}@#{major}.#{minor}"
+        end
+        problem <<-EOS.undent
+          Formula has other versions so create an alias:
+            cd #{formula.tap.alias_dir}
+            ln -s #{formula.path.to_s.gsub(formula.tap.path, "..")} #{alias_name}
+        EOS
+      end
     end
 
     return unless @strict
@@ -468,7 +476,7 @@ class FormulaAuditor
         end
 
         if @@aliases.include?(dep.name) &&
-           (core_formula? || !dep_f.versioned_formula?)
+           (dep_f.core_formula? || !dep_f.versioned_formula?)
           problem "Dependency '#{dep.name}' is an alias; use the canonical name '#{dep.to_formula.full_name}'."
         end
 
@@ -576,39 +584,6 @@ class FormulaAuditor
     return if formula.deprecated_options.empty?
     return if formula.versioned_formula?
     problem "New formulae should not use `deprecated_option`."
-  end
-
-  def audit_desc
-    # For now, only check the description when using `--strict`
-    return unless @strict
-
-    desc = formula.desc
-
-    unless desc && !desc.empty?
-      problem "Formula should have a desc (Description)."
-      return
-    end
-
-    # Make sure the formula name plus description is no longer than 80 characters
-    # Note full_name includes the name of the tap, while name does not
-    linelength = "#{formula.name}: #{desc}".length
-    if linelength > 80
-      problem <<-EOS.undent
-        Description is too long. \"name: desc\" should be less than 80 characters.
-        Length is calculated as #{formula.name} + desc. (currently #{linelength})
-      EOS
-    end
-
-    if desc =~ /([Cc]ommand ?line)/
-      problem "Description should use \"command-line\" instead of \"#{$1}\""
-    end
-
-    if desc =~ /^([Aa]n?)\s/
-      problem "Description shouldn't start with an indefinite article (#{$1})"
-    end
-
-    return unless desc.downcase.start_with? "#{formula.name} "
-    problem "Description shouldn't include the formula name"
   end
 
   def audit_homepage
@@ -1273,7 +1248,6 @@ class FormulaAuditor
     audit_class
     audit_specs
     audit_revision_and_version_scheme
-    audit_desc
     audit_homepage
     audit_bottle_spec
     audit_github_repository
